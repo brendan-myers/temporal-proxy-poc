@@ -45,32 +45,32 @@ func (m *MockCachingMaterialsManager) DecryptMaterial(ctx context.Context, crypt
 
 func TestEncryptDecrypt(t *testing.T) {
 	tests := []struct {
-		name          string
-		plaintext     []byte
-		keyContext    CryptoContext
+		name           string
+		plaintext      []byte
+		keyContext     CryptoContext
 		payloadContext CryptoContext
-		shouldFail    bool
+		shouldFail     bool
 	}{
 		{
-			name:          "Basic encryption and decryption",
-			plaintext:     []byte("This is a test message"),
-			keyContext:    CryptoContext{"purpose": "test"},
+			name:           "Basic encryption and decryption",
+			plaintext:      []byte("This is a test message"),
+			keyContext:     CryptoContext{"purpose": "test"},
 			payloadContext: CryptoContext{"purpose": "test"},
-			shouldFail:    false,
+			shouldFail:     false,
 		},
 		{
-			name:          "Empty plaintext",
-			plaintext:     []byte{},
-			keyContext:    CryptoContext{"purpose": "test"},
+			name:           "Empty plaintext",
+			plaintext:      []byte{},
+			keyContext:     CryptoContext{"purpose": "test"},
 			payloadContext: CryptoContext{"purpose": "test"},
-			shouldFail:    false,
+			shouldFail:     false,
 		},
 		{
-			name:          "Different contexts",
-			plaintext:     []byte("Message with different contexts"),
-			keyContext:    CryptoContext{"purpose": "encryption"},
+			name:           "Different contexts",
+			plaintext:      []byte("Message with different contexts"),
+			keyContext:     CryptoContext{"purpose": "encryption"},
 			payloadContext: CryptoContext{"purpose": "authentication", "user": "test"},
-			shouldFail:    false,
+			shouldFail:     false,
 		},
 	}
 

@@ -17,13 +17,13 @@ func ContextToBytes(ctx CryptoContext) []byte {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	
+
 	// Build a map with sorted keys for JSON marshaling
 	sortedMap := make(map[string]string)
 	for _, k := range keys {
 		sortedMap[k] = ctx[k]
 	}
-	
+
 	// Marshal to JSON for a consistent binary representation
 	data, err := json.Marshal(sortedMap)
 	if err != nil {
@@ -31,6 +31,6 @@ func ContextToBytes(ctx CryptoContext) []byte {
 		// This should never happen with simple string maps
 		return []byte{}
 	}
-	
+
 	return data
 }

@@ -59,13 +59,13 @@ func BenchmarkEncryption(b *testing.B) {
 	data := []byte("This is a sample text that will be encrypted for benchmarking with context")
 	keyCtx := CryptoContext{"purpose": "encryption", "keyId": "benchmark"}
 	payloadCtx := CryptoContext{"purpose": "authentication", "userId": "benchmark"}
-	
+
 	cachingCipher := NewCipher(cachingMM)
 	noCacheCipher := NewCipher(noCacheMM)
-	
+
 	encryptInput := &EncryptInput{
-		Plaintext:   data,
-		KeyContext:  keyCtx,
+		Plaintext:      data,
+		KeyContext:     keyCtx,
 		PayloadContext: payloadCtx,
 	}
 
@@ -93,13 +93,13 @@ func BenchmarkDecryption(b *testing.B) {
 	data := []byte("This is a sample text that will be encrypted for benchmarking with context")
 	keyCtx := CryptoContext{"purpose": "encryption", "keyId": "benchmark"}
 	payloadCtx := CryptoContext{"purpose": "authentication", "userId": "benchmark"}
-	
+
 	cachingCipher := NewCipher(cachingMM)
 	noCacheCipher := NewCipher(noCacheMM)
-	
+
 	encryptInput := &EncryptInput{
-		Plaintext:   data,
-		KeyContext:  keyCtx,
+		Plaintext:      data,
+		KeyContext:     keyCtx,
 		PayloadContext: payloadCtx,
 	}
 
@@ -107,12 +107,12 @@ func BenchmarkDecryption(b *testing.B) {
 	ctx := context.Background()
 	ciphertext, encryptedKey, err := cachingCipher.Encrypt(ctx, encryptInput)
 	require.NoError(b, err, "Pre-encryption failed")
-	
+
 	decryptInput := &DecryptInput{
-		Ciphertext:   ciphertext,
-		EncryptedKey: encryptedKey,
-		KeyContext:   keyCtx,
-		PayloadContext:  payloadCtx,
+		Ciphertext:     ciphertext,
+		EncryptedKey:   encryptedKey,
+		KeyContext:     keyCtx,
+		PayloadContext: payloadCtx,
 	}
 
 	b.Run("WithCache", func(b *testing.B) {
@@ -139,7 +139,7 @@ func BenchmarkFullCycle(b *testing.B) {
 	data := []byte("This is a sample text that will be encrypted for benchmarking with context")
 	keyCtx := CryptoContext{"purpose": "encryption", "keyId": "benchmark"}
 	payloadCtx := CryptoContext{"purpose": "authentication", "userId": "benchmark"}
-	
+
 	cachingCipher := NewCipher(cachingMM)
 	noCacheCipher := NewCipher(noCacheMM)
 
@@ -149,22 +149,22 @@ func BenchmarkFullCycle(b *testing.B) {
 			// Encrypt
 			ctx := context.Background()
 			encryptInput := &EncryptInput{
-				Plaintext:   data,
-				KeyContext:  keyCtx,
+				Plaintext:      data,
+				KeyContext:     keyCtx,
 				PayloadContext: payloadCtx,
 			}
-			
+
 			ciphertext, encryptedKey, err := cachingCipher.Encrypt(ctx, encryptInput)
 			require.NoError(b, err, "Encryption failed")
 
 			// Decrypt
 			decryptInput := &DecryptInput{
-				Ciphertext:   ciphertext,
-				EncryptedKey: encryptedKey,
-				KeyContext:   keyCtx,
-				PayloadContext:  payloadCtx,
+				Ciphertext:     ciphertext,
+				EncryptedKey:   encryptedKey,
+				KeyContext:     keyCtx,
+				PayloadContext: payloadCtx,
 			}
-			
+
 			_, err = cachingCipher.Decrypt(ctx, decryptInput)
 			require.NoError(b, err, "Decryption failed")
 		}
@@ -176,22 +176,22 @@ func BenchmarkFullCycle(b *testing.B) {
 			// Encrypt
 			ctx := context.Background()
 			encryptInput := &EncryptInput{
-				Plaintext:   data,
-				KeyContext:  keyCtx,
+				Plaintext:      data,
+				KeyContext:     keyCtx,
 				PayloadContext: payloadCtx,
 			}
-			
+
 			ciphertext, encryptedKey, err := noCacheCipher.Encrypt(ctx, encryptInput)
 			require.NoError(b, err, "Encryption failed")
 
 			// Decrypt
 			decryptInput := &DecryptInput{
-				Ciphertext:   ciphertext,
-				EncryptedKey: encryptedKey,
-				KeyContext:   keyCtx,
-				PayloadContext:  payloadCtx,
+				Ciphertext:     ciphertext,
+				EncryptedKey:   encryptedKey,
+				KeyContext:     keyCtx,
+				PayloadContext: payloadCtx,
 			}
-			
+
 			_, err = noCacheCipher.Decrypt(ctx, decryptInput)
 			require.NoError(b, err, "Decryption failed")
 		}
@@ -221,7 +221,7 @@ func TestCachingBehavior(t *testing.T) {
 		5,                    // Low usage count for testing
 	)
 	require.NoError(t, err, "Failed to create caching materials manager")
-	
+
 	cipher := NewCipher(cachingMM)
 
 	// Test encryption caching
@@ -229,10 +229,10 @@ func TestCachingBehavior(t *testing.T) {
 		data := []byte("Test data with context")
 		keyCtx := CryptoContext{"purpose": "encryption", "keyId": "test"}
 		payloadCtx := CryptoContext{"purpose": "authentication", "userId": "test"}
-		
+
 		encryptInput := &EncryptInput{
-			Plaintext:   data,
-			KeyContext:  keyCtx,
+			Plaintext:      data,
+			KeyContext:     keyCtx,
 			PayloadContext: payloadCtx,
 		}
 
@@ -254,12 +254,12 @@ func TestCachingBehavior(t *testing.T) {
 
 		// Test decryption caching
 		decryptInput := &DecryptInput{
-			Ciphertext:   ciphertext1,
-			EncryptedKey: encryptedKey1,
-			KeyContext:   keyCtx,
-			PayloadContext:  payloadCtx,
+			Ciphertext:     ciphertext1,
+			EncryptedKey:   encryptedKey1,
+			KeyContext:     keyCtx,
+			PayloadContext: payloadCtx,
 		}
-		
+
 		// First decryption - should decrypt key
 		startFirstDecrypt := time.Now()
 		_, err = cipher.Decrypt(ctx, decryptInput)

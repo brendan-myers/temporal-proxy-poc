@@ -67,7 +67,7 @@ func TestNewAWSKMSProvider(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mockKMS := &MockKMSClient{}
 			provider := NewAWSKMSProvider(mockKMS, tt.options)
-			
+
 			// We can't directly access private fields, so we'll test functionality instead
 			// by making a call that uses the key spec
 			cryptoCtx := CryptoContext{"purpose": "test"}
@@ -75,11 +75,11 @@ func TestNewAWSKMSProvider(t *testing.T) {
 				Plaintext:      []byte("test-plaintext"),
 				CiphertextBlob: []byte("test-ciphertext"),
 			}
-			
+
 			ctx := context.Background()
 			_, err := provider.GetMaterial(ctx, cryptoCtx)
 			require.NoError(t, err)
-			
+
 			assert.Equal(t, tt.options.KeyID, mockKMS.lastKeyId)
 			assert.Equal(t, tt.expected, mockKMS.lastKeySpec)
 		})
@@ -122,11 +122,11 @@ func TestAWSKMSProvider_GetMaterial(t *testing.T) {
 				generateDataKeyOutput: tt.mockOutput,
 				generateDataKeyError:  tt.mockError,
 			}
-			
+
 			provider := NewAWSKMSProvider(mockKMS, KMSOptions{KeyID: "test-key-id"})
 			ctx := context.Background()
 			material, err := provider.GetMaterial(ctx, tt.context)
-			
+
 			if tt.expectedError {
 				assert.Error(t, err)
 				assert.Nil(t, material)
@@ -134,12 +134,12 @@ func TestAWSKMSProvider_GetMaterial(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, tt.expectedPlaintext, material.PlaintextKey)
 				assert.Equal(t, tt.mockOutput.CiphertextBlob, material.EncryptedKey)
-				
+
 				// Verify encryption context was passed correctly
 				for k, v := range tt.context {
 					assert.Equal(t, v, *mockKMS.lastEncryptionContext[k])
 				}
-				
+
 				// Verify key spec and key ID
 				assert.Equal(t, "AES_256", mockKMS.lastKeySpec)
 				assert.Equal(t, "test-key-id", mockKMS.lastKeyId)
@@ -187,14 +187,14 @@ func TestAWSKMSProvider_DecryptMaterial(t *testing.T) {
 				decryptOutput: tt.mockOutput,
 				decryptError:  tt.mockError,
 			}
-			
+
 			provider := NewAWSKMSProvider(mockKMS, KMSOptions{KeyID: "test-key-id"})
 			inputMaterial := &Material{
 				EncryptedKey: tt.encryptedKey,
 			}
 			ctx := context.Background()
 			material, err := provider.DecryptMaterial(ctx, tt.context, inputMaterial)
-			
+
 			if tt.expectedError {
 				assert.Error(t, err)
 				assert.Nil(t, material)
@@ -202,7 +202,7 @@ func TestAWSKMSProvider_DecryptMaterial(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, tt.expectedPlaintext, material.PlaintextKey)
 				assert.Equal(t, tt.encryptedKey, material.EncryptedKey)
-				
+
 				// Verify encryption context was passed correctly
 				for k, v := range tt.context {
 					assert.Equal(t, v, *mockKMS.lastEncryptionContext[k])
@@ -215,30 +215,30 @@ func TestAWSKMSProvider_DecryptMaterial(t *testing.T) {
 func TestAWSKMSProvider_EncryptionContextHandling(t *testing.T) {
 	// Test that empty context works
 	emptyContext := CryptoContext{}
-	
+
 	mockKMS := &MockKMSClient{
 		generateDataKeyOutput: &kms.GenerateDataKeyOutput{
 			Plaintext:      []byte("test-plaintext"),
 			CiphertextBlob: []byte("test-ciphertext"),
 		},
 	}
-	
+
 	provider := NewAWSKMSProvider(mockKMS, KMSOptions{KeyID: "test-key-id"})
 	ctx := context.Background()
 	_, err := provider.GetMaterial(ctx, emptyContext)
 	require.NoError(t, err)
 	assert.Empty(t, mockKMS.lastEncryptionContext)
-	
+
 	// Test that complex context is handled correctly
 	complexContext := CryptoContext{
 		"key1": "value1",
 		"key2": "value2",
 		"key3": "value3",
 	}
-	
+
 	_, err = provider.GetMaterial(ctx, complexContext)
 	require.NoError(t, err)
-	
+
 	assert.Equal(t, 3, len(mockKMS.lastEncryptionContext))
 	assert.Equal(t, "value1", *mockKMS.lastEncryptionContext["key1"])
 	assert.Equal(t, "value2", *mockKMS.lastEncryptionContext["key2"])

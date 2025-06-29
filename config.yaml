@@ -10,11 +10,10 @@ targets:
       key_file: "/path/to/<namespace>.<account>/tls.key"
     encryption_key: "<key>"
     namespace: "<namespace>.<account>"
-
-  - source: "<namespace>.<account>.internal"
-    target: "<namespace>.<account>.tmprl.cloud:7233"
-    tls:
-      cert_file: "/path/to/<namespace>.<account>/tls.crt"
-      key_file: "/path/to/<namespace>.<account>/tls.key"
-    encryption_key: "<key>"
-    namespace: "<namespace>.<account>"
+    authentication:
+      type: "spiffe"
+      config:
+        trust_domain: "spiffe://example.org/"
+        endpoint: "unix:///tmp/spire-agent/public/api.sock"
+        audiences:
+          - "my_audience"

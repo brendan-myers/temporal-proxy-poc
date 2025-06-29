@@ -55,7 +55,7 @@ func TestUsageCount(t *testing.T) {
 		require.NoError(t, err, "Failed to get material on iteration %d", i)
 
 		// Verify it's the same material (by comparing encrypted key)
-		assert.Equal(t, string(material1.EncryptedKey), string(material.EncryptedKey), 
+		assert.Equal(t, string(material1.EncryptedKey), string(material.EncryptedKey),
 			"Iteration %d: Should get the same material", i)
 
 		// Verify usage count increases
@@ -67,7 +67,7 @@ func TestUsageCount(t *testing.T) {
 	require.NoError(t, err, "Failed to get new material after max usage")
 
 	// Verify it's a different material
-	assert.NotEqual(t, string(material1.EncryptedKey), string(materialNew.EncryptedKey), 
+	assert.NotEqual(t, string(material1.EncryptedKey), string(materialNew.EncryptedKey),
 		"Should get a new material after max usage")
 
 	// Verify usage count is reset
@@ -100,7 +100,7 @@ func TestDecryptionWithDecryptMaterial(t *testing.T) {
 		maxUsage,    // Low usage count for testing
 	)
 	require.NoError(t, err, "Failed to create caching materials manager")
-	
+
 	cipher := NewCipher(cachingMM)
 
 	// Test data
@@ -114,7 +114,7 @@ func TestDecryptionWithDecryptMaterial(t *testing.T) {
 		KeyContext:     cryptoCtx,
 		PayloadContext: cryptoCtx,
 	}
-	
+
 	ciphertext, encryptedKey, err := cipher.Encrypt(ctx, encryptInput)
 	require.NoError(t, err, "Failed to encrypt test data")
 
@@ -122,7 +122,7 @@ func TestDecryptionWithDecryptMaterial(t *testing.T) {
 	inputMaterial := &Material{
 		EncryptedKey: encryptedKey,
 	}
-	
+
 	// Use the material well beyond max usage
 	// Since we don't enforce usage limits on decryption, this should work
 	for i := 1; i <= maxUsage*2; i++ {
@@ -140,7 +140,7 @@ func TestDecryptionWithDecryptMaterial(t *testing.T) {
 		KeyContext:     cryptoCtx,
 		PayloadContext: cryptoCtx,
 	}
-	
+
 	_, err = cipher.Decrypt(ctx, decryptInput)
 	require.NoError(t, err, "Decryption failed after multiple uses")
 
