@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"temporal-sa/temporal-cloud-proxy/crypto"
+	"temporal-sa/temporal-cloud-proxy/metrics"
 
 	"github.com/aws/aws-sdk-go/service/kms"
 
 	commonpb "go.temporal.io/api/common/v1"
+	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 )
 
@@ -29,13 +31,29 @@ const (
 
 // Codec implements PayloadCodec using the crypto package's cached material manager.
 type Codec struct {
-	KeyID        string
-	Cipher       *crypto.Cipher
-	CodecContext map[string]string
+	KeyID          string
+	Cipher         *crypto.Cipher
+	CodecContext   map[string]string
+	MetricsHandler client.MetricsHandler
 }
 
-// NewEncryptionCodec creates a new encryption codec with the specified key ID, AWS KMS client, and codec context.
-func NewEncryptionCodec(kmsClient *kms.KMS, codecContext map[string]string, encryptionKeyID string) converter.PayloadCodec {
+// NewEncryptionCodecWithCaching creates a new encryption codec with configurable caching.
+func NewEncryptionCodecWithCaching(
+	kmsClient *kms.KMS,
+	codecContext map[string]string,
+	encryptionKeyID string,
+	metricsHandler client.MetricsHandler,
+	cachingConfig *crypto.CachingConfig,
+) converter.PayloadCodec {
+	// Set default caching config if not provided
+	if cachingConfig == nil {
+		cachingConfig = &crypto.CachingConfig{
+			MaxCache:        100,
+			MaxAge:          5 * time.Minute,
+			MaxMessagesUsed: 100,
+		}
+	}
+
 	// Create AWS KMS provider
 	awsProvider := crypto.NewAWSKMSProvider(kmsClient, crypto.KMSOptions{
 		KeyID:   encryptionKeyID,
@@ -45,18 +63,18 @@ func NewEncryptionCodec(kmsClient *kms.KMS, codecContext map[string]string, encr
 	// Create caching materials manager
 	cachingMM, _ := crypto.NewCachingMaterialsManager(
 		awsProvider,
-		100,           // maxCache
-		5*time.Minute, // maxAge
-		1000,          // maxMessagesUsed
+		*cachingConfig,
+		metricsHandler,
 	)
 
 	// Create cipher with caching materials manager
 	cipher := crypto.NewCipher(cachingMM)
 
 	return &Codec{
-		KeyID:        encryptionKeyID,
-		Cipher:       cipher,
-		CodecContext: codecContext,
+		KeyID:          encryptionKeyID,
+		Cipher:         cipher,
+		CodecContext:   codecContext,
+		MetricsHandler: metricsHandler,
 	}
 }
 
@@ -77,10 +95,14 @@ func (e *Codec) createCryptoContext(purpose, encryptionKeyID string, codecContex
 
 // Encode implements converter.PayloadCodec.Encode.
 func (e *Codec) Encode(payloads []*commonpb.Payload) ([]*commonpb.Payload, error) {
+	start := time.Now()
+	e.MetricsHandler.Counter(metrics.EncryptRequests).Inc(1)
+
 	result := make([]*commonpb.Payload, len(payloads))
 	for i, p := range payloads {
 		origBytes, err := p.Marshal()
 		if err != nil {
+			e.MetricsHandler.Counter(metrics.EncryptErrors).Inc(1)
 			return payloads, err
 		}
 
@@ -98,6 +120,7 @@ func (e *Codec) Encode(payloads []*commonpb.Payload) ([]*commonpb.Payload, error
 
 		ciphertext, encryptedKey, err := e.Cipher.Encrypt(context.Background(), input)
 		if err != nil {
+			e.MetricsHandler.Counter(metrics.EncryptErrors).Inc(1)
 			return payloads, err
 		}
 
@@ -111,11 +134,16 @@ func (e *Codec) Encode(payloads []*commonpb.Payload) ([]*commonpb.Payload, error
 		}
 	}
 
+	e.MetricsHandler.Counter(metrics.EncryptSuccess).Inc(1)
+	e.MetricsHandler.Timer(metrics.EncryptLatency).Record(time.Since(start))
 	return result, nil
 }
 
 // Decode implements converter.PayloadCodec.Decode.
 func (e *Codec) Decode(payloads []*commonpb.Payload) ([]*commonpb.Payload, error) {
+	start := time.Now()
+	e.MetricsHandler.Counter(metrics.DecryptRequests).Inc(1)
+
 	result := make([]*commonpb.Payload, len(payloads))
 	for i, p := range payloads {
 		// Only if it's encrypted
@@ -126,6 +154,7 @@ func (e *Codec) Decode(payloads []*commonpb.Payload) ([]*commonpb.Payload, error
 
 		keyID, ok := p.Metadata[MetadataEncryptionKeyID]
 		if !ok {
+			e.MetricsHandler.Counter(metrics.DecryptErrors).Inc(1)
 			return payloads, fmt.Errorf("no encryption key id")
 		}
 
@@ -135,6 +164,7 @@ func (e *Codec) Decode(payloads []*commonpb.Payload) ([]*commonpb.Payload, error
 		// Get the encrypted key from metadata
 		encryptedKey, ok := p.Metadata[MetadataEncryptedDataKey]
 		if !ok {
+			e.MetricsHandler.Counter(metrics.DecryptErrors).Inc(1)
 			return payloads, fmt.Errorf("no encrypted key in payload")
 		}
 
@@ -147,15 +177,19 @@ func (e *Codec) Decode(payloads []*commonpb.Payload) ([]*commonpb.Payload, error
 
 		decrypted, err := e.Cipher.Decrypt(context.Background(), input)
 		if err != nil {
+			e.MetricsHandler.Counter(metrics.DecryptErrors).Inc(1)
 			return payloads, err
 		}
 
 		result[i] = &commonpb.Payload{}
 		err = result[i].Unmarshal(decrypted)
 		if err != nil {
+			e.MetricsHandler.Counter(metrics.DecryptErrors).Inc(1)
 			return payloads, err
 		}
 	}
 
+	e.MetricsHandler.Counter(metrics.DecryptSuccess).Inc(1)
+	e.MetricsHandler.Timer(metrics.DecryptLatency).Record(time.Since(start))
 	return result, nil
 }

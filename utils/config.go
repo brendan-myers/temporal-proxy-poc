@@ -1,13 +1,29 @@
 package utils
 
 type Config struct {
-	Server  ServerConfig   `yaml:"server"`
-	Targets []TargetConfig `yaml:"targets"`
+	Server     ServerConfig     `yaml:"server"`
+	Metrics    MetricsConfig    `yaml:"metrics"`
+	Encryption EncryptionConfig `yaml:"encryption"`
+	Targets    []TargetConfig   `yaml:"targets"`
 }
 
 type ServerConfig struct {
 	Port int    `yaml:"port"`
 	Host string `yaml:"host"`
+}
+
+type MetricsConfig struct {
+	Port int `yaml:"port"`
+}
+
+type EncryptionConfig struct {
+	Caching CachingConfig `yaml:"caching"`
+}
+
+type CachingConfig struct {
+	MaxCache int    `yaml:"max_cache,omitempty"`
+	MaxAge   string `yaml:"max_age,omitempty"`
+	MaxUsage int    `yaml:"max_usage,omitempty"`
 }
 
 type TargetConfig struct {

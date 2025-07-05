@@ -6,10 +6,19 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"temporal-sa/temporal-cloud-proxy/metrics"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru"
+	"go.temporal.io/sdk/client"
 )
+
+// CachingConfig holds configuration for caching materials manager
+type CachingConfig struct {
+	MaxCache        int
+	MaxAge          time.Duration
+	MaxMessagesUsed int
+}
 
 // CachingMaterialsManager manages cryptographic materials with caching
 type CachingMaterialsManager struct {
@@ -18,25 +27,30 @@ type CachingMaterialsManager struct {
 	maxAge          time.Duration
 	maxMessagesUsed int
 	underlyingMM    MaterialsManager
+	metricsHandler  client.MetricsHandler
 }
 
 // NewCachingMaterialsManager creates a new caching materials manager
 func NewCachingMaterialsManager(
 	underlyingMM MaterialsManager,
-	maxCache int,
-	maxAge time.Duration,
-	maxMessagesUsed int,
+	config CachingConfig,
+	metricsHandler client.MetricsHandler,
 ) (*CachingMaterialsManager, error) {
-	cache, err := lru.New(maxCache)
+	cache, err := lru.New(config.MaxCache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cache: %v", err)
 	}
 
+	if metricsHandler == nil {
+		metricsHandler = client.MetricsNopHandler
+	}
+
 	return &CachingMaterialsManager{
 		cache:           cache,
-		maxAge:          maxAge,
-		maxMessagesUsed: maxMessagesUsed,
+		maxAge:          config.MaxAge,
+		maxMessagesUsed: config.MaxMessagesUsed,
 		underlyingMM:    underlyingMM,
+		metricsHandler:  metricsHandler,
 	}, nil
 }
 
@@ -66,11 +80,16 @@ func (c *CachingMaterialsManager) GetMaterial(ctx context.Context, cryptoCtx Cry
 		c.mutex.Unlock()
 	}
 
-	// Get new material from underlying MM
+	// Get new material from underlying MM with metrics
+	start := time.Now()
+	c.metricsHandler.Counter(metrics.MaterialsManagerGetRequests).Inc(1)
 	material, err := c.underlyingMM.GetMaterial(ctx, cryptoCtx)
+	c.metricsHandler.Timer(metrics.MaterialsManagerGetLatency).Record(time.Since(start))
 	if err != nil {
+		c.metricsHandler.Counter(metrics.MaterialsManagerGetErrors).Inc(1)
 		return nil, err
 	}
+	c.metricsHandler.Counter(metrics.MaterialsManagerGetSuccess).Inc(1)
 
 	// Initialize usage metadata
 	material.CreatedAt = time.Now()
@@ -111,11 +130,16 @@ func (c *CachingMaterialsManager) DecryptMaterial(ctx context.Context, cryptoCtx
 		c.mutex.Unlock()
 	}
 
-	// Get new material from underlying MM
+	// Get new material from underlying MM with metrics
+	start := time.Now()
+	c.metricsHandler.Counter(metrics.MaterialsManagerDecryptRequests).Inc(1)
 	decryptedMaterial, err := c.underlyingMM.DecryptMaterial(ctx, cryptoCtx, material)
+	c.metricsHandler.Timer(metrics.MaterialsManagerDecryptLatency).Record(time.Since(start))
 	if err != nil {
+		c.metricsHandler.Counter(metrics.MaterialsManagerDecryptErrors).Inc(1)
 		return nil, err
 	}
+	c.metricsHandler.Counter(metrics.MaterialsManagerDecryptSuccess).Inc(1)
 
 	// Initialize usage metadata
 	decryptedMaterial.CreatedAt = time.Now()

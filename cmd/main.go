@@ -5,13 +5,21 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"temporal-sa/temporal-cloud-proxy/auth"
+	"temporal-sa/temporal-cloud-proxy/crypto"
+	"temporal-sa/temporal-cloud-proxy/metrics"
 	"temporal-sa/temporal-cloud-proxy/proxy"
 	"temporal-sa/temporal-cloud-proxy/utils"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
+	"go.opentelemetry.io/otel/attribute"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 	"google.golang.org/grpc"
@@ -61,12 +69,32 @@ func main() {
 			grpcServer := grpc.NewServer()
 			workflowservice.RegisterWorkflowServiceServer(grpcServer, handler)
 
+			// Initialize metrics
+			metrics.InitPrometheus()
+			metricsServer := &http.Server{Addr: ":" + strconv.Itoa(cfg.Metrics.Port)}
+			http.Handle(metrics.DefaultPrometheusPath, promhttp.Handler())
+			go func() {
+				fmt.Printf("Metrics is exposed at %s:%d%s\n", cfg.Server.Host, cfg.Metrics.Port, metrics.DefaultPrometheusPath)
+				if err := metricsServer.ListenAndServe(); err != http.ErrServerClosed {
+					log.Printf("metrics server error: %v", err)
+				}
+			}()
+
+			c := make(chan os.Signal, 1)
+			signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+			go func() {
+				<-c
+				fmt.Println("\nShutting down gracefully...")
+				grpcServer.GracefulStop()
+				os.Exit(0)
+			}()
+
 			lis, err := net.Listen("tcp", cfg.Server.Host+":"+strconv.Itoa(cfg.Server.Port))
 			if err != nil {
 				return err
 			}
 
-			fmt.Printf("listening on %s:%d\n", cfg.Server.Host, cfg.Server.Port)
+			fmt.Printf("Proxy is listening on %s:%d\n", cfg.Server.Host, cfg.Server.Port)
 
 			err = grpcServer.Serve(lis)
 
@@ -118,15 +146,42 @@ func configureProxy(proxyConns *proxy.Conn, cfg *utils.Config) error {
 			}
 		}
 
+		metricsHandler := metrics.NewMetricsHandler(metrics.MetricsHandlerOptions{
+			// Todo: do we need these many attributes?
+			InitialAttributes: attribute.NewSet(
+				attribute.String("source", t.Source),
+				attribute.String("target", t.Target),
+				attribute.String("namespace", t.Namespace),
+				attribute.String("auth_type", authType),
+				attribute.String("encryption_key", t.EncryptionKey),
+			),
+		})
+
+		// Parse global caching config
+		var cachingConfig *crypto.CachingConfig
+		if cfg.Encryption.Caching.MaxCache > 0 || cfg.Encryption.Caching.MaxAge != "" || cfg.Encryption.Caching.MaxUsage > 0 {
+			cachingConfig = &crypto.CachingConfig{
+				MaxCache:        cfg.Encryption.Caching.MaxCache,
+				MaxMessagesUsed: cfg.Encryption.Caching.MaxUsage,
+			}
+			if cfg.Encryption.Caching.MaxAge != "" {
+				if duration, err := time.ParseDuration(cfg.Encryption.Caching.MaxAge); err == nil {
+					cachingConfig.MaxAge = duration
+				}
+			}
+		}
+
 		err := proxyConns.AddConn(proxy.AddConnInput{
-			Source:          t.Source,
-			Target:          t.Target,
-			TLSCertPath:     t.TLS.CertFile,
-			TLSKeyPath:      t.TLS.KeyFile,
-			EncryptionKeyID: t.EncryptionKey,
-			Namespace:       t.Namespace,
-			AuthManager:     authManager,
-			AuthType:        authType,
+			Source:              t.Source,
+			Target:              t.Target,
+			TLSCertPath:         t.TLS.CertFile,
+			TLSKeyPath:          t.TLS.KeyFile,
+			EncryptionKeyID:     t.EncryptionKey,
+			Namespace:           t.Namespace,
+			AuthManager:         authManager,
+			AuthType:            authType,
+			MetricsHandler:      metricsHandler,
+			CryptoCachingConfig: cachingConfig,
 		})
 
 		if err != nil {

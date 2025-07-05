@@ -36,18 +36,24 @@ func setupManagers(b testing.TB) (*CachingMaterialsManager, *CachingMaterialsMan
 	// Create the caching materials manager
 	cachingMM, err := NewCachingMaterialsManager(
 		awsProvider,
-		MaxCacheSize,
-		KeyTTL,
-		MaxKeyUsage,
+		CachingConfig{
+			MaxCache:        MaxCacheSize,
+			MaxAge:          KeyTTL,
+			MaxMessagesUsed: MaxKeyUsage,
+		},
+		nil, // MetricsHandler
 	)
 	require.NoError(b, err, "Failed to create caching materials manager")
 
 	// Create a non-caching materials manager
 	noCacheMM, err := NewCachingMaterialsManager(
 		awsProvider,
-		1, // minimal cache size
-		0, // zero TTL forces refresh
-		1, // single use forces refresh
+		CachingConfig{
+			MaxCache:        1, // minimal cache size
+			MaxAge:          0, // zero TTL forces refresh
+			MaxMessagesUsed: 1, // single use forces refresh
+		},
+		nil, // MetricsHandler
 	)
 	require.NoError(b, err, "Failed to create no-cache materials manager")
 
@@ -216,9 +222,12 @@ func TestCachingBehavior(t *testing.T) {
 	// Create the caching materials manager with short TTL for testing
 	cachingMM, err := NewCachingMaterialsManager(
 		awsProvider,
-		MaxCacheSize,
-		100*time.Millisecond, // Very short TTL for testing
-		5,                    // Low usage count for testing
+		CachingConfig{
+			MaxCache:        MaxCacheSize,
+			MaxAge:          100 * time.Millisecond, // Very short TTL for testing
+			MaxMessagesUsed: 5,                      // Low usage count for testing
+		},
+		nil, // MetricsHandler
 	)
 	require.NoError(t, err, "Failed to create caching materials manager")
 

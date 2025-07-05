@@ -42,9 +42,12 @@ func TestCachingMaterialsManager_GetMaterial(t *testing.T) {
 	mockMM := NewMockMaterialsManager()
 	cachingMM, err := NewCachingMaterialsManager(
 		mockMM,
-		10,            // maxCache
-		5*time.Minute, // maxAge
-		5,             // maxMessagesUsed
+		CachingConfig{
+			MaxCache:        10,
+			MaxAge:          5 * time.Minute,
+			MaxMessagesUsed: 5,
+		},
+		nil, // MetricsHandler
 	)
 	require.NoError(t, err, "Failed to create caching materials manager")
 
@@ -72,9 +75,12 @@ func TestCachingMaterialsManager_MaterialExpiration(t *testing.T) {
 	mockMM := NewMockMaterialsManager()
 	cachingMM, err := NewCachingMaterialsManager(
 		mockMM,
-		10,                  // maxCache
-		50*time.Millisecond, // very short maxAge for testing
-		100,                 // high maxMessagesUsed to focus on age
+		CachingConfig{
+			MaxCache:        10,
+			MaxAge:          50 * time.Millisecond, // very short maxAge for testing
+			MaxMessagesUsed: 100,                   // high maxMessagesUsed to focus on age
+		},
+		nil, // MetricsHandler
 	)
 	require.NoError(t, err, "Failed to create caching materials manager")
 
@@ -108,9 +114,12 @@ func TestCachingMaterialsManager_UsageLimit(t *testing.T) {
 	maxUsage := 3
 	cachingMM, err := NewCachingMaterialsManager(
 		mockMM,
-		10,            // maxCache
-		5*time.Minute, // long maxAge to focus on usage count
-		maxUsage,      // low maxMessagesUsed for testing
+		CachingConfig{
+			MaxCache:        10,
+			MaxAge:          5 * time.Minute, // long maxAge to focus on usage count
+			MaxMessagesUsed: maxUsage,        // low maxMessagesUsed for testing
+		},
+		nil, // MetricsHandler
 	)
 	require.NoError(t, err, "Failed to create caching materials manager")
 

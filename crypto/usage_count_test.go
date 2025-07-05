@@ -32,9 +32,12 @@ func TestUsageCount(t *testing.T) {
 	maxUsage := 3
 	cachingMM, err := NewCachingMaterialsManager(
 		awsProvider,
-		MaxCacheSize,
-		1*time.Hour, // Long TTL to focus on usage count
-		maxUsage,    // Low usage count for testing
+		CachingConfig{
+			MaxCache:        MaxCacheSize,
+			MaxAge:          1 * time.Hour, // Long TTL to focus on usage count
+			MaxMessagesUsed: maxUsage,      // Low usage count for testing
+		},
+		nil, // MetricsHandler
 	)
 	require.NoError(t, err, "Failed to create caching materials manager")
 
@@ -95,9 +98,12 @@ func TestDecryptionWithDecryptMaterial(t *testing.T) {
 	maxUsage := 3 // This should not affect decryption
 	cachingMM, err := NewCachingMaterialsManager(
 		awsProvider,
-		MaxCacheSize,
-		1*time.Hour, // Long TTL to focus on usage count
-		maxUsage,    // Low usage count for testing
+		CachingConfig{
+			MaxCache:        MaxCacheSize,
+			MaxAge:          1 * time.Hour, // Long TTL to focus on usage count
+			MaxMessagesUsed: maxUsage,      // Low usage count for testing
+		},
+		nil, // MetricsHandler
 	)
 	require.NoError(t, err, "Failed to create caching materials manager")
 
