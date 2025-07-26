@@ -102,6 +102,10 @@ func (m MetricsHandler) GetAttributes() attribute.Set {
 	return m.attributes
 }
 
+func (m MetricsHandler) AddAttributes(attributes ...attribute.KeyValue) {
+	m.attributes = attribute.NewSet(append(m.attributes.ToSlice(), attributes...)...)
+}
+
 func (m MetricsHandler) WithTags(tags map[string]string) client.MetricsHandler {
 	attributes := m.attributes.ToSlice()
 	for k, v := range tags {

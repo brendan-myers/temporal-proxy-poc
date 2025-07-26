@@ -22,36 +22,16 @@ workloads:
           cert_file: "/path/to/<namespace>.<account>/tls.crt"
           key_file: "/path/to/<namespace>.<account>/tls.key"
         api_key: # only set either value or env, not both
-            value: "<api key>"
-            env: <env_var>
-    encryption_key: "<key>"
-#    authentication: # spiffe authentication example
-#      type: "spiffe"
+          value: "<api key>"
+          env: <env_var>
+#    encryption:  # aws kms encryption example
+#      type: "aws-kms"
 #      config:
-#        trust_domain: "spiffe://example.org/"
-#        endpoint: "unix:///tmp/spire-agent/public/api.sock"
-#        audiences:
-#          - "temporal_cloud_proxy"
-#    authentication: # jwt authentication example
-#      type: "jwt"
+#         key-id: "<key>"
+#    encryption: # gcp kms encryption example
+#      type: "gcp-kms"
 #      config:
-#        jwks-url: "http://localhost:8200/v1/identity/oidc/.well-known/keys"
-#        audiences:
-#        - "temporal_cloud_proxy"
-
-  - workload_id: "<id>"
-    temporal_cloud:
-      namespace: "<namespace>.<account>"
-      host_port: "<namespace>.<account>.tmprl.cloud:7233" # endpoint when using mTLS
-      # host_port: "<region>.<cloud>.api.temporal.io:7233" # endpoint when using API keys
-      authentication: # only set either tls or api_key, not both
-        tls:
-          cert_file: "/path/to/<namespace>.<account>/tls.crt"
-          key_file: "/path/to/<namespace>.<account>/tls.key"
-        api_key: # only set either value or env, not both
-            value: "<api key>"
-            env: <env_var>
-    encryption_key: "<key>"
+#         key-name: "<key>"
 #    authentication: # spiffe authentication example
 #      type: "spiffe"
 #      config:

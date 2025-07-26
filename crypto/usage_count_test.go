@@ -26,7 +26,7 @@ func TestUsageCount(t *testing.T) {
 	kmsClient := kms.New(sess)
 
 	// Create the AWS KMS provider
-	awsProvider := NewAWSKMSProvider(kmsClient, KMSOptions{KeyID: keyID})
+	awsProvider := NewAWSKMSProvider(kmsClient, AWSKMSOptions{KeyID: keyID})
 
 	// Create the caching materials manager with specific usage limit
 	maxUsage := 3
@@ -92,7 +92,7 @@ func TestDecryptionWithDecryptMaterial(t *testing.T) {
 	kmsClient := kms.New(sess)
 
 	// Create the AWS KMS provider
-	awsProvider := NewAWSKMSProvider(kmsClient, KMSOptions{KeyID: keyID})
+	awsProvider := NewAWSKMSProvider(kmsClient, AWSKMSOptions{KeyID: keyID})
 
 	// Create the caching materials manager with specific usage limit
 	maxUsage := 3 // This should not affect decryption

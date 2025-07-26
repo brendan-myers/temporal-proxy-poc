@@ -28,4 +28,15 @@ const (
 	MaterialsManagerDecryptRequests = TemporalProxyPrefix + "materials_manager_decrypt_requests"
 	MaterialsManagerDecryptErrors   = TemporalProxyPrefix + "materials_manager_decrypt_errors"
 	MaterialsManagerDecryptSuccess  = TemporalProxyPrefix + "materials_manager_decrypt_success"
+
+	// Proxy metrics
+	ProxyRequestTotal   = TemporalProxyPrefix + "requests_total"
+	ProxyRequestSuccess = TemporalProxyPrefix + "request_success"
+	ProxyRequestErrors  = TemporalProxyPrefix + "request_errors"
+	ProxyLatency        = TemporalProxyPrefix + "latency"
+
+	// Namespace metrics
+	//ProxyRequestRequests = TemporalProxyPrefix + "requests_total"
+	//ProxyRequestSuccess  = TemporalProxyPrefix + "request_success"
+	//ProxyRequestErrors   = TemporalProxyPrefix + "request_errors"
 )

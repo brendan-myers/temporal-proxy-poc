@@ -5,114 +5,238 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/kms"
+	"os"
+	"sync"
+	"temporal-sa/temporal-cloud-proxy/auth"
+	"temporal-sa/temporal-cloud-proxy/codec"
+	"temporal-sa/temporal-cloud-proxy/config"
+	"temporal-sa/temporal-cloud-proxy/metrics"
+	"time"
+
+	"go.opentelemetry.io/otel/attribute"
 	"go.temporal.io/sdk/converter"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"os"
-	"sync"
-	"temporal-sa/temporal-cloud-proxy/auth"
-	"temporal-sa/temporal-cloud-proxy/codec"
-	"temporal-sa/temporal-cloud-proxy/crypto"
-	"temporal-sa/temporal-cloud-proxy/metrics"
-	"temporal-sa/temporal-cloud-proxy/utils"
 )
 
-type Conn struct {
-	mu        sync.RWMutex
-	namespace map[string]NamespaceConn
+type (
+	ProxyProvider interface {
+		GetConnectionMux() grpc.ClientConnInterface
+		Start() error
+		Stop() error
+	}
+
+	proxyServer struct {
+		grpc.ClientConnInterface
+		connectionMux  map[string]namespaceConnection
+		mu             sync.RWMutex
+		logger         *zap.Logger
+		metricsHandler metrics.MetricsHandler
+	}
+
+	namespaceConnection struct {
+		conn           *grpc.ClientConn
+		auth           *auth.Authenticator
+		metricsHandler metrics.MetricsHandler
+	}
+)
+
+func newProxyProvider(configProvider config.ConfigProvider, logger *zap.Logger,
+	authFactory auth.AuthenticatorFactory, codecFactory codec.EncryptionCodecFactory) (ProxyProvider, error) {
+	proxy := &proxyServer{
+		connectionMux:  make(map[string]namespaceConnection),
+		logger:         logger,
+		metricsHandler: metrics.NewMetricsHandler(metrics.MetricsHandlerOptions{}),
+	}
+
+	for _, w := range configProvider.GetProxyConfig().Workloads {
+		logger.Debug("adding namespace connection",
+			zap.String("workload-id", w.WorkloadId),
+			zap.String("namespace", w.TemporalCloud.Namespace),
+		)
+
+		nsConn := &namespaceConnection{
+			metricsHandler: metrics.NewMetricsHandler(metrics.MetricsHandlerOptions{
+				InitialAttributes: attribute.NewSet(
+					attribute.String("workload_id", w.WorkloadId),
+					attribute.String("namespace", w.TemporalCloud.Namespace),
+				),
+			}),
+		}
+
+		// configure worker auth
+		if w.Authentication == nil {
+			logger.Warn("workload configured without worker authentication",
+				zap.String("workload-id", w.WorkloadId))
+		}
+		if w.Authentication != nil {
+			authenticator, err := authFactory.NewAuthenticator(*w.Authentication)
+			if err != nil {
+				logger.Error("failed to create authenticator",
+					zap.String("workload-id", w.WorkloadId), zap.Error(err))
+				return nil, fmt.Errorf(
+					"failed to create authenticator for workload %s, %w", w.WorkloadId, err)
+			}
+			nsConn.auth = &authenticator
+		}
+
+		var grpcInterceptors []grpc.UnaryClientInterceptor
+
+		// configure encryption/decryption codec
+		if w.Encryption == nil {
+			logger.Warn("workload configured without payload encryption",
+				zap.String("workload-id", w.WorkloadId))
+		}
+		if w.Encryption != nil {
+			// configure encryption metrics handler
+			attributes := []attribute.KeyValue{
+				attribute.String("workload_id", w.WorkloadId),
+				attribute.String("namespace", w.TemporalCloud.Namespace),
+				attribute.String("host_port", w.TemporalCloud.HostPort),
+			}
+			if w.Authentication != nil {
+				attributes = append(attributes, attribute.String("auth_type", w.Authentication.Type))
+			}
+
+			metricsHandler := metrics.NewMetricsHandler(metrics.MetricsHandlerOptions{
+				InitialAttributes: attribute.NewSet(
+					attributes...,
+					// Note: encryption codec adds additional attributes
+				),
+			})
+
+			encryptionCodec, err := codecFactory.NewEncryptionCodec(codec.EncryptionCodecOptions{
+				LocalEncryptionConfig: *w.Encryption,
+				MetricsHandler:        &metricsHandler,
+				CodecContext: map[string]string{
+					"namespace": w.TemporalCloud.Namespace,
+				},
+			})
+			if err != nil {
+				logger.Error("failed to create encryption codec",
+					zap.String("workload-id", w.WorkloadId), zap.Error(err))
+				return nil, fmt.Errorf(
+					"failed to create encryption codec for workload %s, %w", w.WorkloadId, err)
+			}
+
+			if encryptionCodec != nil {
+				encryptionInterceptor, err := converter.NewPayloadCodecGRPCClientInterceptor(
+					converter.PayloadCodecGRPCClientInterceptorOptions{
+						Codecs: []converter.PayloadCodec{encryptionCodec},
+					},
+				)
+				if err != nil {
+					logger.Error("failed to create client interceptor",
+						zap.String("workload-id", w.WorkloadId), zap.Error(err))
+					return nil, fmt.Errorf(
+						"failed to create client interceptor for workload %s, %w", w.WorkloadId, err)
+				}
+				if encryptionInterceptor != nil {
+					grpcInterceptors = append(grpcInterceptors, encryptionInterceptor)
+				}
+			}
+		}
+
+		// set api key or mTLS auth on the namespace connection
+		tlsConfig, authInterceptor, err := setNamespaceAuth(w, logger)
+		if err != nil {
+			logger.Error("failed to set namespace auth",
+				zap.String("workload-id", w.WorkloadId), zap.Error(err))
+			return nil, fmt.Errorf(
+				"failed to set namespace auth for workload %s, %w", w.WorkloadId, err)
+		}
+		if authInterceptor != nil {
+			grpcInterceptors = append(grpcInterceptors, authInterceptor)
+		}
+
+		conn, err := grpc.NewClient(
+			w.TemporalCloud.HostPort,
+			grpc.WithTransportCredentials(credentials.NewTLS(
+				tlsConfig,
+			)),
+			grpc.WithChainUnaryInterceptor(grpcInterceptors...),
+		)
+		if err != nil {
+			logger.Error("failed to create grpc client",
+				zap.String("workload-id", w.WorkloadId), zap.Error(err))
+			return nil, fmt.Errorf(
+				"failed to create grpc client for workload %s, %w", w.WorkloadId, err)
+		}
+
+		nsConn.conn = conn
+
+		proxy.mu.Lock()
+		proxy.connectionMux[w.WorkloadId] = *nsConn
+		proxy.mu.Unlock()
+	}
+
+	return proxy, nil
 }
 
-type NamespaceConn struct {
-	conn        *grpc.ClientConn
-	authManager *auth.AuthManager
-	authType    string
+func (n *namespaceConnection) GetConnection() grpc.ClientConnInterface {
+	return n.conn
 }
 
-func NewConn() *Conn {
-	return &Conn{
-		namespace: make(map[string]NamespaceConn),
+func (n *namespaceConnection) GetAuthenticator() auth.Authenticator {
+	if n.auth == nil {
+		return nil
 	}
+	return *n.auth
 }
 
-// createKMSClient creates an AWS KMS client
-func createKMSClient() *kms.KMS {
-	// Use the region from parameter or environment variable
-	region := os.Getenv("AWS_REGION")
-	if region == "" {
-		region = "us-west-2" // Default region
+func (n *namespaceConnection) Close() error {
+	var errs []error
+
+	if err := n.conn.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	if n.auth != nil {
+		if err := n.GetAuthenticator().Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
-	sess := session.Must(session.NewSession(&aws.Config{
-		Region: aws.String(region),
-	}))
-
-	return kms.New(sess)
+	return errors.Join(errs...)
 }
 
-// AddConnInput contains parameters for adding a new connection
-type AddConnInput struct {
-	Workload            *utils.WorkloadConfig
-	AuthManager         *auth.AuthManager
-	AuthType            string
-	MetricsHandler      metrics.MetricsHandler
-	CryptoCachingConfig *crypto.CachingConfig
+func (p *proxyServer) GetConnectionMux() grpc.ClientConnInterface {
+	return p
 }
 
-// AddConn adds a new connection to the proxy
-func (mc *Conn) AddConn(input AddConnInput) error {
-	fmt.Printf("Adding connection id: %s namespace: %s hostport: %s\n",
-		input.Workload.WorkloadId, input.Workload.TemporalCloud.Namespace, input.Workload.TemporalCloud.HostPort)
+func (p *proxyServer) Start() error {
+	return nil
+}
 
-	mc.mu.RLock()
-	_, exists := mc.namespace[input.Workload.WorkloadId]
-	mc.mu.RUnlock()
-	if exists {
-		return fmt.Errorf("workload-id %s already exists", input.Workload.WorkloadId)
+func (p *proxyServer) Stop() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	var errs []error
+
+	for _, conn := range p.connectionMux {
+		if err := conn.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
-	if input.Workload.TemporalCloud.Authentication.ApiKey != nil && input.Workload.TemporalCloud.Authentication.TLS != nil {
-		return fmt.Errorf("%s: cannot have both api key and mtls authentication configured on a single workload",
-			input.Workload.WorkloadId)
-	}
+	return errors.Join(errs...)
+}
 
-	//Initialize AWS KMS client
-	kmsClient := createKMSClient()
+func setNamespaceAuth(workloadConfig config.WorkloadConfig, logger *zap.Logger) (*tls.Config, grpc.UnaryClientInterceptor, error) {
+	tlsConfig := &tls.Config{}
+	var grpcInterceptor grpc.UnaryClientInterceptor
 
-	codecContext := map[string]string{
-		"namespace": input.Workload.TemporalCloud.Namespace,
-	}
-
-	clientInterceptor, err := converter.NewPayloadCodecGRPCClientInterceptor(
-		converter.PayloadCodecGRPCClientInterceptorOptions{
-			Codecs: []converter.PayloadCodec{codec.NewEncryptionCodecWithCaching(
-				kmsClient,
-				codecContext,
-				input.Workload.EncryptionKey,
-				input.MetricsHandler,
-				input.CryptoCachingConfig,
-			)},
-		},
-	)
-	if err != nil {
-		return err
-	}
-
-	tlsConfig := tls.Config{}
-
-	grpcInterceptors := []grpc.UnaryClientInterceptor{
-		clientInterceptor,
-	}
-
-	if apiKeyConfig := input.Workload.TemporalCloud.Authentication.ApiKey; apiKeyConfig != nil {
+	if apiKeyConfig := workloadConfig.TemporalCloud.Authentication.ApiKey; apiKeyConfig != nil {
+		//
+		//	Configure API key auth
+		//
 		if apiKeyConfig.Value != "" && apiKeyConfig.EnvVar != "" {
-			// TODO proper logging
-			fmt.Printf("WARN - multiple values provided for api key, using value. workload-id: %s\n", input.Workload.WorkloadId)
+			logger.Warn("both value and envvar provider for api key; using value",
+				zap.String("workload-id", workloadConfig.WorkloadId))
 		}
 
 		apiKey := ""
@@ -123,10 +247,10 @@ func (mc *Conn) AddConn(input AddConnInput) error {
 		}
 
 		if apiKey == "" {
-			return fmt.Errorf("%s: no api key provided", input.Workload.WorkloadId)
+			return nil, nil, fmt.Errorf("no api key provided")
 		}
 
-		grpcInterceptors = append(grpcInterceptors,
+		grpcInterceptor =
 			func(ctx context.Context, method string, req any, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 				md, ok := metadata.FromIncomingContext(ctx)
 
@@ -136,111 +260,98 @@ func (mc *Conn) AddConn(input AddConnInput) error {
 					md.Delete("temporal-namespace")
 
 					ctx = metadata.NewOutgoingContext(ctx, md)
-					ctx = metadata.AppendToOutgoingContext(ctx, "temporal-namespace", input.Workload.TemporalCloud.Namespace)
+					ctx = metadata.AppendToOutgoingContext(ctx, "temporal-namespace", workloadConfig.TemporalCloud.Namespace)
 					ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+apiKey)
 				}
 
 				return invoker(ctx, method, req, reply, cc, opts...)
-			})
-	} else {
-		cert, err := tls.LoadX509KeyPair(input.Workload.TemporalCloud.Authentication.TLS.CertFile,
-			input.Workload.TemporalCloud.Authentication.TLS.KeyFile)
+			}
+	} else if workloadConfig.TemporalCloud.Authentication.TLS != nil {
+		//
+		//	Configure mTLS auth
+		//
+		cert, err := tls.LoadX509KeyPair(workloadConfig.TemporalCloud.Authentication.TLS.CertFile,
+			workloadConfig.TemporalCloud.Authentication.TLS.KeyFile)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 
 		tlsConfig.Certificates = []tls.Certificate{cert}
+	} else {
+		// Passthrough. Useful if the client/worker is setting the API. Note: will not work with
+		// mTLS configured at the client/worker.
 	}
 
-	conn, err := grpc.NewClient(
-		input.Workload.TemporalCloud.HostPort,
-		grpc.WithTransportCredentials(credentials.NewTLS(
-			&tlsConfig,
-		)),
-		grpc.WithChainUnaryInterceptor(grpcInterceptors...),
-	)
-	if err != nil {
-		return err
-	}
-
-	mc.mu.Lock()
-	mc.namespace[input.Workload.WorkloadId] = NamespaceConn{
-		conn:        conn,
-		authManager: input.AuthManager,
-		authType:    input.AuthType,
-	}
-	mc.mu.Unlock()
-
-	return nil
-}
-
-// CloseAll closes all connections
-func (mc *Conn) CloseAll() error {
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
-
-	var errs []error
-
-	for _, namespace := range mc.namespace {
-		if err := namespace.conn.Close(); err != nil {
-			errs = append(errs, err)
-		}
-		if namespace.authManager != nil {
-			if err := namespace.authManager.Close(); err != nil {
-				errs = append(errs, err)
-			}
-		}
-	}
-
-	return errors.Join(errs...)
+	return tlsConfig, grpcInterceptor, nil
 }
 
 // Invoke implements the grpc.ClientConnInterface Invoke method
-func (mc *Conn) Invoke(ctx context.Context, method string, args interface{}, reply interface{}, opts ...grpc.CallOption) error {
+func (p *proxyServer) Invoke(ctx context.Context, method string, args interface{}, reply interface{}, opts ...grpc.CallOption) error {
+	start := time.Now()
+	p.metricsHandler.Counter(metrics.ProxyRequestTotal).Inc(1)
+
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
+		p.metricsHandler.WithTags(map[string]string{"error": "unable to read metadata"}).Counter(metrics.ProxyRequestErrors).Inc(1)
 		return status.Errorf(codes.InvalidArgument, "unable to read metadata")
 	}
 
 	workloadId := md.Get("workload-id")
 
 	if len(workloadId) <= 0 {
+		p.metricsHandler.WithTags(map[string]string{"error": "metadata missing workload-id"}).Counter(metrics.ProxyRequestErrors).Inc(1)
 		return status.Error(codes.InvalidArgument, "metadata missing workload-id")
 	}
 	if len(workloadId) != 1 {
+		p.metricsHandler.WithTags(map[string]string{"error": "metadata contains multiple workload-id entries"}).Counter(metrics.ProxyRequestErrors).Inc(1)
 		return status.Error(codes.InvalidArgument, "metadata contains multiple workload-id entries")
 	}
 
-	mc.mu.RLock()
-	namespace, exists := mc.namespace[workloadId[0]]
-	mc.mu.RUnlock()
+	p.mu.RLock()
+	namespace, exists := p.connectionMux[workloadId[0]]
+	p.mu.RUnlock()
 
 	if !exists {
-		return status.Errorf(codes.InvalidArgument, "invalid workload-id: %s", workloadId[0])
+		p.logger.Warn("invalid workload-id", zap.String("workload-id", workloadId[0]))
+		p.metricsHandler.WithTags(map[string]string{"error": "invalid workload-id"}).Counter(metrics.ProxyRequestErrors).Inc(1)
+		return status.Errorf(codes.InvalidArgument, "invalid workload-id")
 	}
 
-	if namespace.authManager != nil {
+	if namespace.GetAuthenticator() != nil {
 		authorization := md.Get("authorization")
 
 		if len(authorization) < 1 {
+			namespace.metricsHandler.WithTags(map[string]string{"error": "metadata is missing authorization"}).Counter(metrics.ProxyRequestErrors).Inc(1)
 			return status.Error(codes.InvalidArgument, "metadata is missing authorization")
 		} else if len(authorization) > 1 {
+			namespace.metricsHandler.WithTags(map[string]string{"error": "metadata contains multiple authorization entries"}).Counter(metrics.ProxyRequestErrors).Inc(1)
 			return status.Error(codes.InvalidArgument, "metadata contains multiple authorization entries")
 		}
 
-		result, err := namespace.authManager.Authenticate(ctx, namespace.authType, authorization[0])
+		result, err := namespace.GetAuthenticator().Authenticate(ctx, authorization[0])
 		if err != nil {
-			return status.Errorf(codes.Unknown, "failed to authenticate: %s", err)
+			namespace.metricsHandler.WithTags(map[string]string{"error": "failed to authenticate"}).Counter(metrics.ProxyRequestErrors).Inc(1)
+			return status.Errorf(codes.Unknown, "failed to authenticate: %v", err)
 		}
 		if !result.Authenticated {
+			namespace.metricsHandler.WithTags(map[string]string{"error": "invalid token"}).Counter(metrics.ProxyRequestErrors).Inc(1)
 			return status.Errorf(codes.Unauthenticated, "invalid token")
 		}
 	}
 
-	return namespace.conn.Invoke(ctx, method, args, reply, opts...)
+	p.logger.Debug("invoking method",
+		zap.String("workload-id", workloadId[0]),
+		zap.String("method", method),
+		zap.Any("args", args),
+		zap.Any("md", md),
+	)
+
+	namespace.metricsHandler.Counter(metrics.ProxyRequestSuccess).Inc(1)
+	namespace.metricsHandler.Timer(metrics.ProxyLatency).Record(time.Since(start))
+	return namespace.GetConnection().Invoke(ctx, method, args, reply, opts...)
 }
 
 // NewStream implements the grpc.ClientConnInterface NewStream method
-func (mc *Conn) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+func (p *proxyServer) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	return nil, status.Error(codes.Unimplemented, "streams not supported")
 }

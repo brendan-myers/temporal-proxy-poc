@@ -8,8 +8,6 @@ import (
 	"temporal-sa/temporal-cloud-proxy/crypto"
 	"temporal-sa/temporal-cloud-proxy/metrics"
 
-	"github.com/aws/aws-sdk-go/service/kms"
-
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
@@ -39,7 +37,7 @@ type Codec struct {
 
 // NewEncryptionCodecWithCaching creates a new encryption codec with configurable caching.
 func NewEncryptionCodecWithCaching(
-	kmsClient *kms.KMS,
+	kmsProvider crypto.MaterialsManager,
 	codecContext map[string]string,
 	encryptionKeyID string,
 	metricsHandler client.MetricsHandler,
@@ -54,15 +52,9 @@ func NewEncryptionCodecWithCaching(
 		}
 	}
 
-	// Create AWS KMS provider
-	awsProvider := crypto.NewAWSKMSProvider(kmsClient, crypto.KMSOptions{
-		KeyID:   encryptionKeyID,
-		KeySpec: "AES_256",
-	})
-
 	// Create caching materials manager
 	cachingMM, _ := crypto.NewCachingMaterialsManager(
-		awsProvider,
+		kmsProvider,
 		*cachingConfig,
 		metricsHandler,
 	)

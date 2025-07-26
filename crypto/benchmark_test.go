@@ -31,7 +31,7 @@ func setupManagers(b testing.TB) (*CachingMaterialsManager, *CachingMaterialsMan
 	kmsClient := kms.New(sess)
 
 	// Create the AWS KMS provider
-	awsProvider := NewAWSKMSProvider(kmsClient, KMSOptions{KeyID: keyID})
+	awsProvider := NewAWSKMSProvider(kmsClient, AWSKMSOptions{KeyID: keyID})
 
 	// Create the caching materials manager
 	cachingMM, err := NewCachingMaterialsManager(
@@ -217,7 +217,7 @@ func TestCachingBehavior(t *testing.T) {
 	kmsClient := kms.New(sess)
 
 	// Create the AWS KMS provider
-	awsProvider := NewAWSKMSProvider(kmsClient, KMSOptions{KeyID: keyID})
+	awsProvider := NewAWSKMSProvider(kmsClient, AWSKMSOptions{KeyID: keyID})
 
 	// Create the caching materials manager with short TTL for testing
 	cachingMM, err := NewCachingMaterialsManager(

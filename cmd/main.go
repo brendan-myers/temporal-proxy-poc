@@ -3,176 +3,116 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
-	"net"
-	"net/http"
+	"go.uber.org/fx"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"temporal-sa/temporal-cloud-proxy/auth"
-	"temporal-sa/temporal-cloud-proxy/crypto"
+	"temporal-sa/temporal-cloud-proxy/codec"
+	"temporal-sa/temporal-cloud-proxy/config"
 	"temporal-sa/temporal-cloud-proxy/metrics"
 	"temporal-sa/temporal-cloud-proxy/proxy"
-	"temporal-sa/temporal-cloud-proxy/utils"
-	"time"
+	"temporal-sa/temporal-cloud-proxy/transport"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/urfave/cli/v2"
-	"go.opentelemetry.io/otel/attribute"
-	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/sdk/client"
-	"google.golang.org/grpc"
 )
 
 var configFilePath string
 
-func main() {
+func run(args []string) error {
+	app := buildCLIOptions()
+	return app.Run(args)
+}
+
+func buildCLIOptions() *cli.App {
 	app := &cli.App{
 		Name:  "tclp",
 		Usage: "Temporal Cloud Proxy",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:        "config",
-				Usage:       "config file",
+				Name:        config.ConfigPathFlag,
+				Usage:       "Path to yaml config file. Default is ./config.yaml",
 				Aliases:     []string{"c"},
-				Value:       "config.yaml",
+				Value:       config.DefaultConfigPath,
 				Destination: &configFilePath,
 			},
+			&cli.StringFlag{
+				Name:     config.LogLevelFlag,
+				Usage:    "Set log level (debug, info, warn, error). Default level is info",
+				Required: false,
+			},
 		},
-		Action: func(*cli.Context) error {
-			configManager, err := utils.NewConfigManager(configFilePath)
-			if err != nil {
-				return err
-			}
-			defer configManager.Close()
-
-			cfg := configManager.GetConfig()
-
-			proxyConns := proxy.NewConn()
-			defer proxyConns.CloseAll()
-
-			if err := configureProxy(proxyConns, cfg); err != nil {
-				return err
-			}
-
-			workflowClient := workflowservice.NewWorkflowServiceClient(proxyConns)
-
-			handler, err := client.NewWorkflowServiceProxyServer(
-				client.WorkflowServiceProxyOptions{Client: workflowClient},
-			)
-			if err != nil {
-				return err
-			}
-
-			grpcServer := grpc.NewServer()
-			workflowservice.RegisterWorkflowServiceServer(grpcServer, handler)
-
-			// Initialize metrics
-			metrics.InitPrometheus()
-			metricsServer := &http.Server{Addr: ":" + strconv.Itoa(cfg.Metrics.Port)}
-			http.Handle(metrics.DefaultPrometheusPath, promhttp.Handler())
-			go func() {
-				fmt.Printf("Metrics is exposed at %s:%d%s\n", cfg.Server.Host, cfg.Metrics.Port, metrics.DefaultPrometheusPath)
-				if err := metricsServer.ListenAndServe(); err != http.ErrServerClosed {
-					log.Printf("metrics server error: %v", err)
-				}
-			}()
-
-			c := make(chan os.Signal, 1)
-			signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-			go func() {
-				<-c
-				fmt.Println("\nShutting down gracefully...")
-				grpcServer.GracefulStop()
-				os.Exit(0)
-			}()
-
-			lis, err := net.Listen("tcp", cfg.Server.Host+":"+strconv.Itoa(cfg.Server.Port))
-			if err != nil {
-				return err
-			}
-
-			fmt.Printf("Proxy is listening on %s:%d\n", cfg.Server.Host, cfg.Server.Port)
-
-			err = grpcServer.Serve(lis)
-
-			return err
-		},
+		Action: startProxy,
 	}
 
-	if err := app.Run(os.Args); err != nil {
-		log.Fatalln(err)
+	return app
+}
+
+func startProxy(c *cli.Context) error {
+	logLevel := c.String(config.LogLevelFlag)
+
+	var zapLevel zapcore.Level
+	if err := zapLevel.UnmarshalText([]byte(logLevel)); err != nil {
+		return fmt.Errorf("invalid log level %q: %w", logLevel, err)
+	}
+
+	loggerConfig := zap.NewProductionConfig()
+	loggerConfig.Level.SetLevel(zapLevel)
+	logger, err := loggerConfig.Build()
+	if err != nil {
+		return fmt.Errorf("failed to initialise logger: %w", err)
+	}
+
+	app := fx.New(
+		fx.Provide(
+			func() *zap.Logger {
+				return logger
+			},
+			func() *cli.Context { return c },
+			func() context.Context { return c.Context },
+		),
+
+		auth.Module,
+		codec.Module,
+		config.Module,
+		metrics.Module,
+		proxy.Module,
+		transport.Module,
+
+		fx.Invoke(
+			func(metrics.MetricsProvider) {},
+			func(transport.TransportProvider) {},
+		),
+	)
+
+	if err := app.Start(context.Background()); err != nil {
+		return err
+	}
+
+	<-interruptCh()
+
+	return app.Stop(context.Background())
+}
+
+func main() {
+	if err := run(os.Args); err != nil {
+		panic(err)
 	}
 }
 
-func configureProxy(proxyConns *proxy.Conn, cfg *utils.Config) error {
-	ctx := context.TODO()
+func interruptCh() <-chan interface{} {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
-	for _, w := range cfg.Workloads {
-		var authManager *auth.AuthManager
-		var authType string
+	ret := make(chan interface{}, 1)
+	go func() {
+		s := <-c
+		ret <- s
+		close(ret)
+		signal.Stop(c)
+	}()
 
-		if w.Authentication != nil {
-			authManager = auth.NewAuthManager()
-			authType = w.Authentication.Type
-			var authProvider auth.Authenticator
-
-			switch authType {
-			case "spiffe":
-				authProvider = &auth.SpiffeAuthenticator{}
-			case "jwt":
-				authProvider = &auth.JwtAuthenticator{}
-			default:
-				return fmt.Errorf("unsupported authentication type: %s", authType)
-			}
-
-			if err := authProvider.Init(ctx, w.Authentication.Config); err != nil {
-				return fmt.Errorf("failed to initialize %s authenticator: %w", authType, err)
-			}
-
-			if err := authManager.RegisterAuthenticator(authProvider); err != nil {
-				return err
-			}
-		}
-
-		metricsHandler := metrics.NewMetricsHandler(metrics.MetricsHandlerOptions{
-			// Todo: do we need these many attributes?
-			InitialAttributes: attribute.NewSet(
-				attribute.String("workload_id", w.WorkloadId),
-				attribute.String("namespace", w.TemporalCloud.Namespace),
-				attribute.String("host_port", w.TemporalCloud.HostPort),
-				attribute.String("auth_type", authType),
-				attribute.String("encryption_key", w.EncryptionKey),
-			),
-		})
-
-		// Parse global caching config
-		var cachingConfig *crypto.CachingConfig
-		if cfg.Encryption.Caching.MaxCache > 0 || cfg.Encryption.Caching.MaxAge != "" || cfg.Encryption.Caching.MaxUsage > 0 {
-			cachingConfig = &crypto.CachingConfig{
-				MaxCache:        cfg.Encryption.Caching.MaxCache,
-				MaxMessagesUsed: cfg.Encryption.Caching.MaxUsage,
-			}
-			if cfg.Encryption.Caching.MaxAge != "" {
-				if duration, err := time.ParseDuration(cfg.Encryption.Caching.MaxAge); err == nil {
-					cachingConfig.MaxAge = duration
-				}
-			}
-		}
-
-		err := proxyConns.AddConn(proxy.AddConnInput{
-			Workload:            &w,
-			AuthManager:         authManager,
-			AuthType:            authType,
-			MetricsHandler:      metricsHandler,
-			CryptoCachingConfig: cachingConfig,
-		})
-
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return ret
 }

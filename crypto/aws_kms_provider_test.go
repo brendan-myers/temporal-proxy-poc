@@ -48,17 +48,17 @@ func (m *MockKMSClient) Decrypt(input *kms.DecryptInput) (*kms.DecryptOutput, er
 func TestNewAWSKMSProvider(t *testing.T) {
 	tests := []struct {
 		name     string
-		options  KMSOptions
+		options  AWSKMSOptions
 		expected string
 	}{
 		{
 			name:     "Default KeySpec",
-			options:  KMSOptions{KeyID: "test-key-id"},
+			options:  AWSKMSOptions{KeyID: "test-key-id"},
 			expected: "AES_256",
 		},
 		{
 			name:     "Custom KeySpec",
-			options:  KMSOptions{KeyID: "test-key-id", KeySpec: "RSA_2048"},
+			options:  AWSKMSOptions{KeyID: "test-key-id", KeySpec: "RSA_2048"},
 			expected: "RSA_2048",
 		},
 	}
@@ -123,7 +123,7 @@ func TestAWSKMSProvider_GetMaterial(t *testing.T) {
 				generateDataKeyError:  tt.mockError,
 			}
 
-			provider := NewAWSKMSProvider(mockKMS, KMSOptions{KeyID: "test-key-id"})
+			provider := NewAWSKMSProvider(mockKMS, AWSKMSOptions{KeyID: "test-key-id"})
 			ctx := context.Background()
 			material, err := provider.GetMaterial(ctx, tt.context)
 
@@ -188,7 +188,7 @@ func TestAWSKMSProvider_DecryptMaterial(t *testing.T) {
 				decryptError:  tt.mockError,
 			}
 
-			provider := NewAWSKMSProvider(mockKMS, KMSOptions{KeyID: "test-key-id"})
+			provider := NewAWSKMSProvider(mockKMS, AWSKMSOptions{KeyID: "test-key-id"})
 			inputMaterial := &Material{
 				EncryptedKey: tt.encryptedKey,
 			}
@@ -223,7 +223,7 @@ func TestAWSKMSProvider_EncryptionContextHandling(t *testing.T) {
 		},
 	}
 
-	provider := NewAWSKMSProvider(mockKMS, KMSOptions{KeyID: "test-key-id"})
+	provider := NewAWSKMSProvider(mockKMS, AWSKMSOptions{KeyID: "test-key-id"})
 	ctx := context.Background()
 	_, err := provider.GetMaterial(ctx, emptyContext)
 	require.NoError(t, err)

@@ -9,8 +9,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/kms/kmsiface"
 )
 
-// KMSOptions contains configuration options for AWSKMSProvider
-type KMSOptions struct {
+// AWWSKMSOptions contains configuration options for AWSKMSProvider
+type AWSKMSOptions struct {
 	// KeyID is the ARN or ID of the KMS key to use
 	KeyID string
 
@@ -26,7 +26,7 @@ type AWSKMSProvider struct {
 }
 
 // NewAWSKMSProvider creates a new KMS-based materials manager
-func NewAWSKMSProvider(kmsClient kmsiface.KMSAPI, options KMSOptions) *AWSKMSProvider {
+func NewAWSKMSProvider(kmsClient kmsiface.KMSAPI, options AWSKMSOptions) *AWSKMSProvider {
 	// Set default keySpec if not provided
 	keySpec := options.KeySpec
 	if keySpec == "" {
